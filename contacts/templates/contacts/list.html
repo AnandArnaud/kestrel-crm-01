@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kestrel CRM</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 48rem; padding: 0 1rem; color: #1f2933; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #d9e2ec; }
+    th { font-weight: 600; color: #52606d; }
+  </style>
+</head>
+<body>
+  <h1>Kestrel CRM</h1>
+  <p>{{ contacts|length }} contact{{ contacts|length|pluralize }}</p>
+  <table>
+    <thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Added</th></tr></thead>
+    <tbody>
+    {% for contact in contacts %}
+      <tr><td>{{ contact.name }}</td><td>{{ contact.email }}</td><td>{{ contact.company }}</td><td>{{ contact.created_at|date:"Y-m-d" }}</td></tr>
+    {% empty %}
+      <tr><td colspan="4">No contacts yet. Run <code>python manage.py seed_contacts</code> to add a few.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>
