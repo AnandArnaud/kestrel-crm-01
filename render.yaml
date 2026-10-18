@@ -1,0 +1,82 @@
+# Render Blueprint for Kestrel CRM.
+#
+# How "migrate before traffic, no downtime" is achieved:
+#   1. build      -> install deps + collectstatic (produces the new image).
+#   2. preDeploy  -> `manage.py migrate` runs ONCE against the live database
+#                    while the old version is still serving traffic.
+#   3. deploy     -> the new instance boots and must pass the /health/ check
+#                    before Render shifts traffic to it; the old instance is
+#                    only retired afterwards. A failed migrate aborts the
+#                    deploy and the old version keeps serving.
+#
+# Because the old code briefly runs against the already-migrated schema (between
+# steps 2 and 3), migrations must be backward compatible (expand/contract). See
+# the Deployment section of README.md.
+#
+# Apply with: `render blueprint launch` (or connect the repo in the dashboard).
+
+databases:
+  - name: kestrel-db
+    databaseName: kestrel
+    user: kestrel
+    plan: basic-256mb # free Postgres expires after 30 days; use a paid plan for real deploys
+
+envVarGroups:
+  # Shared, non-reference settings. Keeping SECRET_KEY here means every service
+  # gets the SAME generated value (a per-service generateValue would differ).
+  - name: kestrel-shared
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: "0"
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+
+services:
+  # Celery broker (Render "Key Value" == managed Redis). Internal-only.
+  - type: keyvalue
+    name: kestrel-redis
+    plan: starter
+    ipAllowList: [] # no public access; reachable only from this blueprint's services
+    maxmemoryPolicy: noeviction
+
+  # Web process: gunicorn, gated by the health check and the pre-deploy migrate.
+  - type: web
+    name: kestrel-web
+    runtime: python
+    plan: starter # preDeployCommand requires a paid instance type (not free)
+    buildCommand: "pip install -r requirements.txt && python manage.py collectstatic --noinput"
+    preDeployCommand: "python manage.py migrate --noinput"
+    startCommand: "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT"
+    healthCheckPath: /health/
+    envVars: &app_env
+      - key: DATABASE_URL
+        fromDatabase:
+          name: kestrel-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: kestrel-redis
+          property: connectionString
+      - fromGroup: kestrel-shared
+
+  # Celery worker: runs the nightly digest task (which reads the database).
+  - type: worker
+    name: kestrel-worker
+    runtime: python
+    plan: starter
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "celery -A config worker --loglevel=info"
+    envVars: *app_env
+
+  # Celery beat: the scheduler that fires nightly-digest at 02:00 UTC.
+  # Keep this to a single instance so the schedule isn't fired more than once.
+  - type: worker
+    name: kestrel-beat
+    runtime: python
+    plan: starter
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "celery -A config beat --loglevel=info"
+    envVars: *app_env
